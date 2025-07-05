@@ -159,6 +159,15 @@ for date, group in forecast_df.groupby("Date"):
     if uv_index > 6:
         score += 5
 
+    
+    if brightness:
+        if brightness < 80:
+            score -= 15
+        elif brightness < 150:
+            score += 0
+        else:
+            score += 10
+
     if score >= 75:
         status = "🟢 Go"
     elif score >= 50:
@@ -200,5 +209,34 @@ st.markdown(f"**Föhnlage:** {föhn_status}")
 st.subheader("🌩️ Gewitterradar")
 components.iframe("https://www.wetteronline.de/radar/tirol", height=500)
 
-st.subheader(" Live Webcam Reschenpass")
-components.iframe("https://kiteboarding-reschen.eu/webcam-reschenpass/", height=450)
+st.subheader("🌤 Live Webcam Reschenpass")
+
+
+from PIL import Image
+from io import BytesIO
+
+def analyze_webcam_image(url):
+    try:
+        response = requests.get(url, timeout=10)
+        image = Image.open(BytesIO(response.content)).convert("L")  # Graustufen
+        brightness = sum(image.getdata()) / (image.width * image.height)
+        return brightness
+    except Exception as e:
+        st.warning(f"Webcam nicht analysierbar: {e}")
+        return None
+
+# 🌅 Analyse der Webcam-Helligkeit
+st.subheader("📷 Webcam Reschensee (Livebild mit Analyse)")
+webcam_url = "https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg"
+brightness = analyze_webcam_image(webcam_url)
+st.image(webcam_url, caption=f"Live Webcam – Helligkeit: {brightness:.2f}" if brightness else "Live Webcam", use_column_width=True)
+
+if brightness:
+    if brightness < 80:
+        st.warning("🔴 Das Bild wirkt sehr dunkel – evtl. bewölkt oder zu früh/spät.")
+    elif brightness < 150:
+        st.info("🟡 Mäßige Helligkeit – eventuell teils bewölkt.")
+    else:
+        st.success("🟢 Helle Bedingungen – gute Sonnenwahrscheinlichkeit.")
+
+
