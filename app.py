@@ -66,9 +66,13 @@ st.set_page_config(page_title="Kite Forecast Reschensee+", layout="centered")
 st.title("🏄 Kite Forecast Reschensee (mit erweiterten Wetterdaten)")
 
 forecast_data = get_forecast()
+st.write("✅ Forecast geladen:", forecast_data is not None)
 mountain_temp_data = get_mountain_temp()
+st.write("✅ Bergdaten geladen:", mountain_temp_data is not None)
 bozen_pressure = get_pressure("stadt.asp?land=IT&id=11560")
+st.write("🧪 Druck Bozen:", bozen_pressure)
 innsbruck_pressure = get_pressure("stadt.asp?land=AT&id=11115")
+st.write("🧪 Druck Innsbruck:", innsbruck_pressure)
 diff_pressure = bozen_pressure - innsbruck_pressure if bozen_pressure and innsbruck_pressure else None
 
 # Föhnbewertung
@@ -93,6 +97,7 @@ else:
     föhn_status = "Unbekannt"
 
 if forecast_data is None:
+    st.error("❌ Wetterdaten konnten nicht geladen werden.")
     st.stop()
 
 # Forecast DataFrame
@@ -229,6 +234,7 @@ def analyze_webcam_image(url):
 st.subheader("📷 Webcam Reschensee (Livebild mit Analyse)")
 webcam_url = "https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg"
 brightness = analyze_webcam_image(webcam_url)
+st.write("🔎 Webcam-Helligkeit:", brightness)
 st.image(webcam_url, caption=f"Live Webcam – Helligkeit: {brightness:.2f}" if brightness else "Live Webcam", use_column_width=True)
 
 if brightness:
