@@ -5,6 +5,7 @@ from datetime import datetime
 from PIL import Image
 from io import BytesIO
 import numpy as np
+import os
 
 # Konfiguration
 LAT, LON = 46.836, 10.508
@@ -12,7 +13,7 @@ TIMEZONE = "Europe/Berlin"
 WEBCAM_URL = "https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg"
 
 st.set_page_config(page_title="Kite Forecast Reschensee", layout="wide")
-st.title("🏄‍♂️ Kite Forecast Reschensee (mit erweiterter Wetter- & Webcam-Analyse)")
+st.title("Kite Forecast Reschensee")
 
 # Wetterdaten abrufen
 def fetch_weather_data():
@@ -30,19 +31,20 @@ def fetch_weather_data():
         res.raise_for_status()
         return res.json()
     except Exception as e:
-        st.error(f"❌ Wetterdaten konnten nicht geladen werden: {e}")
+        st.error(f"Wetterdaten konnten nicht geladen werden: {e}")
         return None
 
 # Webcam analysieren
 def analyze_webcam_image():
     try:
         res = requests.get(WEBCAM_URL, timeout=10)
-        img = Image.open(BytesIO(res.content)).convert("L")  # Graustufen
+        img = Image.open(BytesIO(res.content)).convert("L")
         np_img = np.array(img)
         brightness = np.mean(np_img)
+        st.image(img, caption="Aktuelles Webcam-Bild Reschensee", use_column_width=True)
         return brightness
     except Exception as e:
-        st.warning(f"⚠️ Webcam konnte nicht analysiert werden: {e}")
+        st.warning(f"Webcam konnte nicht analysiert werden: {e}")
         return None
 
 # Bewertung mit erweitertem Score
@@ -50,63 +52,56 @@ def evaluate_day(wind_avg, wind_dir, clouds, rain, uv, brightness):
     score = 0
     notes = {}
 
-    # Windgeschwindigkeit
     if 10 <= wind_avg <= 25:
         score += 2
-        notes["Wind"] = "🟢"
+        notes["Windgeschwindigkeit"] = "Gut"
     elif 7 <= wind_avg < 10 or 25 < wind_avg <= 30:
         score += 1
-        notes["Wind"] = "🟡"
+        notes["Windgeschwindigkeit"] = "Grenzwertig"
     else:
-        notes["Wind"] = "🔴"
+        notes["Windgeschwindigkeit"] = "Nicht geeignet"
 
-    # Windrichtung
     if wind_dir <= 30 or wind_dir >= 340 or (150 <= wind_dir <= 210):
         score += 2
-        notes["Richtung"] = "🟢"
+        notes["Windrichtung"] = "Gut"
     else:
         score -= 1
-        notes["Richtung"] = "🔴"
+        notes["Windrichtung"] = "Nicht geeignet"
 
-    # Regenwahrscheinlichkeit
     if rain < 30:
         score += 1
-        notes["Regen"] = "🟢"
+        notes["Regenwahrscheinlichkeit"] = "Gering"
     elif rain < 60:
-        notes["Regen"] = "🟡"
+        notes["Regenwahrscheinlichkeit"] = "Mittel"
     else:
-        notes["Regen"] = "🔴"
+        notes["Regenwahrscheinlichkeit"] = "Hoch"
 
-    # Bewölkung
     if clouds < 50:
         score += 1
-        notes["Bewölkung"] = "🟢"
+        notes["Bewölkung"] = "Gering"
     else:
-        notes["Bewölkung"] = "🟡"
+        notes["Bewölkung"] = "Hoch"
 
-    # UV
     if uv > 5:
         score += 1
-        notes["UV"] = "🟢"
+        notes["UV-Index"] = "Hoch"
     else:
-        notes["UV"] = "🟡"
+        notes["UV-Index"] = "Niedrig"
 
-    # Webcam-Helligkeit
     if brightness and brightness > 100:
         score += 1
-        notes["Webcam"] = "🟢"
+        notes["Webcam-Helligkeit"] = "Hell"
     else:
-        notes["Webcam"] = "🟡"
+        notes["Webcam-Helligkeit"] = "Dunkel oder nicht verfügbar"
 
-    # Ampelstatus
-    if score >= 6:
-        amp = "🟢 Perfekt"
-    elif score >= 3:
-        amp = "🟡 Mittel"
+    if score >= 7:
+        status = "Sehr gut"
+    elif score >= 4:
+        status = "Bedingt geeignet"
     else:
-        amp = "🔴 Schlecht"
+        status = "Nicht geeignet"
 
-    return score, amp, notes
+    return score, status, notes
 
 # Darstellung Forecast + Ampelgrid
 def show_forecast(data, webcam_brightness):
@@ -114,7 +109,7 @@ def show_forecast(data, webcam_brightness):
     df["time"] = pd.to_datetime(df["time"])
     df.set_index("time", inplace=True)
 
-    st.subheader("📊 Kitevorschau der nächsten 4 Tage")
+    st.subheader("4-Tages-Kitevorschau")
 
     for i in range(4):
         day = (datetime.now().date() + pd.Timedelta(days=i)).isoformat()
@@ -129,45 +124,87 @@ def show_forecast(data, webcam_brightness):
         rain = day_data["precipitation_probability"].max()
         temp = day_data["temperature_2m"].mean()
 
-        score, amp, notes = evaluate_day(wind_avg, wind_dir, clouds, rain, daily_uv, webcam_brightness)
+        score, status, notes = evaluate_day(wind_avg, wind_dir, clouds, rain, daily_uv, webcam_brightness)
 
-        st.markdown(f"### 📅 {day} — Bewertung: {amp} ({score}/8 Punkte)")
-        grid = pd.DataFrame({
-            "Faktor": ["Wind", "Richtung", "Regen", "Bewölkung", "UV", "Webcam"],
-            "Bewertung": [notes.get(k, "⚪") for k in ["Wind", "Richtung", "Regen", "Bewölkung", "UV", "Webcam"]]
-        })
-        st.table(grid)
+        st.markdown(f"### {day} – Bewertung: **{status}** ({score}/8 Punkte)")
+        st.write(pd.DataFrame(notes.items(), columns=["Faktor", "Bewertung"]))
 
-        with st.expander("🔍 Wetterdetails anzeigen"):
-            st.write(f"- ⛅ Ø Bewölkung: **{clouds:.1f}%**")
-            st.write(f"- 🌬️ Ø Windgeschwindigkeit: **{wind_avg:.1f} km/h**")
-            st.write(f"- 🧭 Windrichtung (Median): **{wind_dir:.0f}°**")
-            st.write(f"- 🌧️ Regenwahrscheinlichkeit (max): **{rain:.0f}%**")
-            st.write(f"- 🌡️ Temperatur: **{temp:.1f}°C**")
-            st.write(f"- ☀️ UV-Index: **{daily_uv}**")
+        with st.expander("Details"):
+            st.write(f"- Ø Windgeschwindigkeit: {wind_avg:.1f} km/h")
+            st.write(f"- Windrichtung (Median): {wind_dir:.0f}°")
+            st.write(f"- Regenwahrscheinlichkeit (max): {rain:.0f}%")
+            st.write(f"- Bewölkung: {clouds:.0f}%")
+            st.write(f"- Temperatur: {temp:.1f}°C")
+            st.write(f"- UV-Index: {daily_uv}")
             if webcam_brightness:
-                st.write(f"- 📷 Webcam-Helligkeit: **{webcam_brightness:.1f}**")
+                st.write(f"- Webcam-Helligkeit: {webcam_brightness:.0f}")
 
-# Hauptlogik
+# Erklärung Bewertung
+def show_scoring_explanation():
+    st.markdown("### Bewertungskriterien (max. 8 Punkte)")
+    st.markdown("""
+    - **Windgeschwindigkeit**: 10–25 km/h (2 Pkt), 7–10 oder 25–30 km/h (1 Pkt)
+    - **Windrichtung**: Nord/Süd optimal (2 Pkt), andere Richtungen (0 oder -1)
+    - **Niederschlag**: <30% = 1 Pkt
+    - **Bewölkung**: <50% = 1 Pkt
+    - **UV-Index**: >5 = 1 Pkt
+    - **Webcam-Helligkeit**: Heller als 100 = 1 Pkt
+    """)
+
+# Hauptausführung
 data = fetch_weather_data()
 webcam_brightness = analyze_webcam_image()
 
 if data:
     show_forecast(data, webcam_brightness)
+    show_scoring_explanation()
 
-    st.markdown("---")
-    st.markdown("### ℹ️ Bewertungskriterien")
-    st.markdown("""
-    - **Windrichtung:** Nord (0°) oder Süd (180°) sind kitebar.
-    - **Windgeschwindigkeit:** Optimal: 10–25 km/h
-    - **Niederschlag:** Bei Regen über 60% → ⛔
-    - **Bewölkung & UV:** Thermik- und Sicht-Indikator
-    - **Webcam:** Helligkeit zeigt reales Wetterbild (bewölkt/sonnig)
-    """)
+# --- Feedback-Bereich ---
+st.markdown("---")
+st.header("Feedback einreichen")
 
-    st.markdown("### 🔗 Datenquellen")
-    st.markdown("""
-    - [🌤️ Open-Meteo Wetterdaten](https://open-meteo.com)
-    - [📷 Webcam Reschensee](https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg)
-    - [🌀 Föhndiagramm Tirol (wetterring.at)](https://wetterring.at/profiwetter/foehndiagramm-tirol)
-    """)
+with st.form("feedback_form"):
+    st.subheader("Wie waren die Bedingungen für dich?")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        wind_rating = st.slider("Windbewertung (1 = kein Wind, 5 = zu stark)", 1, 5, 3)
+        board_type = st.selectbox("Board-Typ", ["Twintip", "Foilboard", "Waveboard"])
+        kite_type = st.selectbox("Kite-Typ", ["Tubekite", "Foilkite"])
+    with col2:
+        kite_size = st.text_input("Kite-Größe (in m²)", "")
+        weight = st.text_input("Körpergewicht (in kg)", "")
+        feedback_date = st.date_input("Datum", value=datetime.today().date())
+
+    comment = st.text_area("Kommentar (optional)")
+    submitted = st.form_submit_button("Absenden")
+
+    if submitted:
+        feedback_data = {
+            "Datum": feedback_date,
+            "Windbewertung": wind_rating,
+            "Board": board_type,
+            "Kite-Typ": kite_type,
+            "Kite-Größe": kite_size,
+            "Gewicht": weight,
+            "Kommentar": comment
+        }
+
+        feedback_file = "feedback.csv"
+        df_new = pd.DataFrame([feedback_data])
+        if os.path.exists(feedback_file):
+            df_old = pd.read_csv(feedback_file)
+            df_all = pd.concat([df_old, df_new], ignore_index=True)
+        else:
+            df_all = df_new
+        df_all.to_csv(feedback_file, index=False)
+
+        st.success("Feedback wurde gespeichert.")
+
+# Anzeige der bisherigen Feedbacks
+st.markdown("### Öffentliche Feedbacks")
+if os.path.exists("feedback.csv"):
+    df_fb = pd.read_csv("feedback.csv")
+    st.dataframe(df_fb)
+else:
+    st.info("Noch kein Feedback vorhanden.")
