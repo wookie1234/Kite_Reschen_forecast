@@ -17,6 +17,27 @@ def get_forecast():
             "forecast_days": 4,
             "timezone": "Europe/Berlin"
         }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; KiteForecastBot/1.0)"
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            st.warning(f"Statuscode {r.status_code}: {r.text}")
+    except Exception as e:
+        st.error(f"Fehler beim Abrufen der Wetterdaten: {e}")
+    return None
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": 46.836,
+            "longitude": 10.508,
+            "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,gusts_10m,precipitation_probability,uv_index",
+            "daily": "sunshine_duration",
+            "forecast_days": 4,
+            "timezone": "Europe/Berlin"
+        }
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 200:
@@ -44,7 +65,13 @@ def get_mountain_temp():
         st.error(f"Fehler beim Abrufen der Berg-Temperaturdaten: {e}")
     return {"temperature_2m": []}
 
-def get_pressure(city_id):
+def get_pressure(city_name):
+    st.info(f"Druckdaten für {city_name} werden simuliert.")
+    if city_name == "bozen":
+        return 1012.3
+    elif city_name == "innsbruck":
+        return 1007.9
+    return None
     try:
         url = f"https://www.wetterkontor.de/de/wetter/{city_id}"
         r = requests.get(url, timeout=10)
@@ -69,9 +96,9 @@ forecast_data = get_forecast()
 st.write("✅ Forecast geladen:", forecast_data is not None)
 mountain_temp_data = get_mountain_temp()
 st.write("✅ Bergdaten geladen:", mountain_temp_data is not None)
-bozen_pressure = get_pressure("stadt.asp?land=IT&id=11560")
+bozen_pressure = get_pressure("bozen")
 st.write("🧪 Druck Bozen:", bozen_pressure)
-innsbruck_pressure = get_pressure("stadt.asp?land=AT&id=11115")
+innsbruck_pressure = get_pressure("innsbruck")
 st.write("🧪 Druck Innsbruck:", innsbruck_pressure)
 diff_pressure = bozen_pressure - innsbruck_pressure if bozen_pressure and innsbruck_pressure else None
 
