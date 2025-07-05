@@ -1,11 +1,9 @@
 import streamlit as st
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
 from bs4 import BeautifulSoup
-from PIL import Image
-from io import BytesIO
 import streamlit.components.v1 as components
 
 def get_forecast():
@@ -14,20 +12,18 @@ def get_forecast():
         params = {
             "latitude": 46.836,
             "longitude": 10.508,
-            "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m",
+            "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,gusts_10m,precipitation_probability,uv_index",
+            "daily": "sunshine_duration",
             "forecast_days": 4,
             "timezone": "Europe/Berlin"
         }
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("application/json"):
+        if r.status_code == 200:
             return r.json()
-        else:
-            st.error(f"❌ Ungültige API-Antwort: {r.status_code} - {r.text[:80]}")
-            return None
     except Exception as e:
-        st.error(f"Fehler beim Abrufen der Tal-Wetterdaten: {e}")
-        return None
+        st.error(f"Fehler beim Abrufen der Wetterdaten: {e}")
+    return None
 
 def get_mountain_temp():
     try:
@@ -42,14 +38,11 @@ def get_mountain_temp():
         }
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("application/json"):
+        if r.status_code == 200:
             return r.json()['hourly']
-        else:
-            st.error(f"❌ Ungültige API-Antwort (Berg): {r.status_code} - {r.text[:80]}")
-            return {"temperature_2m": []}
     except Exception as e:
         st.error(f"Fehler beim Abrufen der Berg-Temperaturdaten: {e}")
-        return {"temperature_2m": []}
+    return {"temperature_2m": []}
 
 def get_pressure(city_id):
     try:
@@ -66,9 +59,11 @@ def get_pressure(city_id):
         st.warning(f"Fehler beim Abrufen des Luftdrucks für {city_id}: {e}")
     return None
 
-# Streamlit Interface
-st.set_page_config(page_title="Kite Forecast Reschensee", layout="centered")
-st.title("🏄 Kite Forecast Reschensee")
+def is_kiteable(wind_dir):
+    return (140 <= wind_dir <= 220) or (wind_dir >= 330 or wind_dir <= 30)
+
+st.set_page_config(page_title="Kite Forecast Reschensee+", layout="centered")
+st.title("🏄 Kite Forecast Reschensee (mit erweiterten Wetterdaten)")
 
 forecast_data = get_forecast()
 mountain_temp_data = get_mountain_temp()
@@ -76,13 +71,35 @@ bozen_pressure = get_pressure("stadt.asp?land=IT&id=11560")
 innsbruck_pressure = get_pressure("stadt.asp?land=AT&id=11115")
 diff_pressure = bozen_pressure - innsbruck_pressure if bozen_pressure and innsbruck_pressure else None
 
+# Föhnbewertung
+foehn_score = 0
+if diff_pressure is not None:
+    if diff_pressure <= -6:
+        föhn_score = +10
+        föhn_status = "Starker Nordföhn"
+    elif diff_pressure <= -4:
+        föhn_score = +5
+        föhn_status = "Leichter Nordföhn"
+    elif diff_pressure <= 0:
+        föhn_score = 0
+        föhn_status = "Neutral"
+    elif diff_pressure <= 4:
+        föhn_score = +5
+        föhn_status = "Leichter Südföhn"
+    else:
+        föhn_score = +10
+        föhn_status = "Starker Südföhn"
+else:
+    föhn_status = "Unbekannt"
+
 if forecast_data is None:
     st.stop()
 
-# Datenframe aufbauen
+# Forecast DataFrame
 df_data = {
     "Date": [], "Hour": [], "Wind Speed": [], "Wind Dir": [],
-    "Cloud Cover": [], "Temp": [], "Temp_Mountain": []
+    "Cloud Cover": [], "Temp": [], "Temp_Mountain": [],
+    "Gusts": [], "Precip": [], "UV": []
 }
 
 for i in range(len(forecast_data['hourly']['time'])):
@@ -95,48 +112,56 @@ for i in range(len(forecast_data['hourly']['time'])):
     df_data["Temp"].append(forecast_data['hourly']['temperature_2m'][i])
     mt = mountain_temp_data['temperature_2m'][i] if i < len(mountain_temp_data['temperature_2m']) else None
     df_data["Temp_Mountain"].append(mt)
+    df_data["Gusts"].append(forecast_data['hourly']['gusts_10m'][i])
+    df_data["Precip"].append(forecast_data['hourly']['precipitation_probability'][i])
+    df_data["UV"].append(forecast_data['hourly']['uv_index'][i])
 
 forecast_df = pd.DataFrame(df_data)
 
-# Bewertung pro Tag
+# Tagesbewertung
 daily_scores = []
 for date, group in forecast_df.groupby("Date"):
-    kite_hours = group[(group["Hour"] >= 11) & (group["Hour"] <= 16) &
-                       (group["Wind Speed"] >= 6.2) &
-                       (group["Wind Dir"] >= 140) & (group["Wind Dir"] <= 220)]
+    kite_hours = group[((group["Hour"].between(11, 18)) & (group["Wind Dir"].between(140, 220))) |
+                       ((group["Hour"].between(8, 12)) & ((group["Wind Dir"] >= 330) | (group["Wind Dir"] <= 30))) &
+                       (group["Wind Speed"] >= 6.0)]
+
     cloud_morning = group[(group["Hour"] >= 6) & (group["Hour"] <= 10)]["Cloud Cover"].mean()
     temp_tal = group[(group["Hour"] >= 9) & (group["Hour"] <= 10)]["Temp"].mean()
     temp_berg = group[(group["Hour"] >= 9) & (group["Hour"] <= 10)]["Temp_Mountain"].mean()
+    gust_max = group["Gusts"].max()
+    precip_prob = group["Precip"].max()
+    uv_index = group["UV"].max()
     delta_temp = temp_tal - temp_berg if temp_tal and temp_berg else None
 
-    score = 0
+    score = föhn_score
     if cloud_morning < 30:
-        score += 30
+        score += 20
     elif cloud_morning < 60:
         score += 10
     else:
         score -= 10
 
-    if diff_pressure is not None:
-        if diff_pressure < -6:
-            score -= 30
-        elif diff_pressure < -4:
-            score -= 10
-        else:
-            score += 10
-
     if delta_temp and delta_temp >= 6:
-        score += 15
+        score += 25
     elif delta_temp and delta_temp >= 3:
-        score += 5
+        score += 10
     else:
         score -= 5
 
-    score += len(kite_hours) * 10
+    score += len(kite_hours) * 12
 
-    if score >= 50:
+    if gust_max and gust_max > 40:
+        score -= 15
+
+    if precip_prob > 40:
+        score -= 20
+
+    if uv_index > 6:
+        score += 5
+
+    if score >= 75:
         status = "🟢 Go"
-    elif score >= 20:
+    elif score >= 50:
         status = "🟡 Risky"
     else:
         status = "🔴 No Go"
@@ -147,6 +172,10 @@ for date, group in forecast_df.groupby("Date"):
         "TempDiff_Berg-Tal": delta_temp,
         "KiteableHours": len(kite_hours),
         "PressureDiff": diff_pressure,
+        "Föhnlage": föhn_status,
+        "Max Gust": gust_max,
+        "Precip Prob": precip_prob,
+        "UV Index": uv_index,
         "Score": score,
         "Status": status
     })
@@ -166,7 +195,10 @@ st.pyplot(fig)
 st.markdown(f"**Bozen Druck:** {bozen_pressure} hPa")
 st.markdown(f"**Innsbruck Druck:** {innsbruck_pressure} hPa")
 st.markdown(f"**Druckdifferenz:** {diff_pressure:.2f} hPa" if diff_pressure else "Keine Druckdifferenz verfügbar")
+st.markdown(f"**Föhnlage:** {föhn_status}")
 
-# Webcam anzeigen als eingebettete Seite
-st.subheader("🌤 Live Webcam Reschenpass")
+st.subheader("🌩️ Gewitterradar")
+components.iframe("https://www.wetteronline.de/radar/tirol", height=500)
+
+st.subheader(" Live Webcam Reschenpass")
 components.iframe("https://kiteboarding-reschen.eu/webcam-reschenpass/", height=450)
