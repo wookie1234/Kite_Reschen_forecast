@@ -12,6 +12,27 @@ def get_forecast():
         params = {
             "latitude": 46.836,
             "longitude": 10.508,
+            "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,gusts_10m,precipitation_probability",
+            "daily": "uv_index_max,sunshine_duration",
+            "forecast_days": 4,
+            "timezone": "Europe/Berlin"
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; KiteForecastBot/1.0)"
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            st.warning(f"Statuscode {r.status_code}: {r.text}")
+    except Exception as e:
+        st.error(f"Fehler beim Abrufen der Wetterdaten: {e}")
+    return None
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": 46.836,
+            "longitude": 10.508,
             "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,gusts_10m,precipitation_probability,uv_index",
             "daily": "sunshine_duration",
             "forecast_days": 4,
@@ -297,103 +318,49 @@ if brightness:
 
 
 
-# 🔍 3-Tage-Vorhersage mit Tagesbewertung
+# 🚦 Aktuelle Kite-Ampel
+if forecast_data:
+    today_score, today_ampel, _ = evaluate_day(0, forecast_data, bozen_pressure, innsbruck_pressure)
+    st.markdown(f"## {today_ampel}")
+    st.markdown(f"**Heutiger Tages-Score:** {today_score}/100")
 
-st.markdown("## ℹ️ So entsteht die Kite-Vorhersage")
 
-st.markdown("""
-Die Ampelbewertung und der Tages-Score basieren auf einer gewichteten Auswertung folgender Wetterfaktoren:
 
-| Faktor                    | Wirkung auf Score              |
-|---------------------------|--------------------------------|
-| **Windrichtung**         | Nur Nord (330–30°) & Süd (140–220°) sind kitebar (+10) |
-| **Windgeschwindigkeit**  | Optimal > 14 km/h (+10), schwach < 8 km/h (–15) |
-| **Böenstärke**           | Starke Böen > 35 km/h (–5)     |
-| **Regenwahrscheinlichkeit** | > 40 % (–10)                 |
-| **UV-Index**             | Hoch > 6 (+5 für Thermikanzeichen) |
-| **Bewölkung**            | Gering < 30 % (+5)             |
-| **Föhndiagramm (Druck Bozen – Innsbruck)** | > +4 hPa = Südföhn (+10) / < –4 hPa = Nordföhn (+5) |
-| **Webcam-Helligkeit**    | Sehr dunkel = –15, sonnig = +10 |
-
-Die Bewertung wird für **heute und die folgenden 2 Tage** berechnet. Zusätzlich kannst du Details pro Tag aufklappen.
-
-### 🧭 Quellen der Wetterdaten
-
-- **Open-Meteo API** (https://open-meteo.com) – Wind, Temperatur, UV, Regen, Wolken, Böen
-- **Webcam Reschenpass** (Windy): Live-Bild zur Sonnen- & Helligkeitserkennung
-- **Simulierte Druckdaten** (Bozen/Innsbruck): Normalerweise via wetterring.at oder wetterkontor.de
-""")
-
-st.header("📅 3-Tage-Kite-Vorhersage")
+# 📅 3-Tage-Vorhersage (Detailansicht)
+st.subheader("Tagesübersicht")
+cols = st.columns(3)
 from datetime import timedelta
 
-# Hilfsfunktion für Tagesbewertung
-def evaluate_day(day_index, forecast_data, bozen_pressure, innsbruck_pressure):
-    score = 50
-    info = []
-
-    wind_speed = forecast_data["hourly"]["windspeed_10m"][day_index * 24 + 14]  # ca. 14 Uhr
-    wind_dir = forecast_data["hourly"]["winddirection_10m"][day_index * 24 + 14]
-    gusts = forecast_data["hourly"]["gusts_10m"][day_index * 24 + 14]
-    precip = forecast_data["hourly"]["precipitation_probability"][day_index * 24 + 14]
-    uv = forecast_data["hourly"]["uv_index"][day_index * 24 + 14]
-    cloud = forecast_data["hourly"]["cloudcover"][day_index * 24 + 14]
-
-    direction = "Süd" if 140 <= wind_dir <= 220 else "Nord" if wind_dir >= 330 or wind_dir <= 30 else "unkitebar"
-    info.append(f"💨 Windrichtung: {direction} ({wind_dir}°)")
-
-    if direction == "unkitebar":
-        score -= 30
-    else:
-        score += 10
-
-    info.append(f"🌬 Wind: {wind_speed} km/h")
-    if wind_speed >= 14:
-        score += 10
-    elif wind_speed < 8:
-        score -= 15
-
-    info.append(f"💥 Böen: {gusts} km/h")
-    if gusts > 35:
-        score -= 5
-
-    info.append(f"🌧 Niederschlag: {precip}%")
-    if precip > 40:
-        score -= 10
-
-    info.append(f"🔆 UV-Index: {uv}")
-    if uv > 6:
-        score += 5
-
-    info.append(f"☁️ Bewölkung: {cloud}%")
-    if cloud < 30:
-        score += 5
-
-    # Druckdifferenz simuliert
-    pressure_diff = bozen_pressure - innsbruck_pressure
-    if pressure_diff >= 4:
-        score += 10
-        info.append(f"🌀 Südföhn: +10 (ΔP={pressure_diff:.1f} hPa)")
-    elif pressure_diff <= -4:
-        score += 5
-        info.append(f"🌬 Nordföhn: +5 (ΔP={pressure_diff:.1f} hPa)")
-
-    # Bewertung
-    if score >= 75:
-        amp = "🟢 Gut kitebar"
-    elif score >= 50:
-        amp = "🟡 Möglich"
-    else:
-        amp = "🔴 Nicht empfehlenswert"
-
-    return score, amp, info
-
-# Ausgabe für 3 Tage
 for i in range(3):
     date = datetime.today() + timedelta(days=i)
-    st.subheader(date.strftime("📅 %A, %d. %B %Y"))
     score, amp, details = evaluate_day(i, forecast_data, bozen_pressure, innsbruck_pressure)
-    st.markdown(f"**Tages-Score:** {score} – {amp}")
-    with st.expander("🔎 Details anzeigen"):
-        for line in details:
-            st.markdown(line)
+    with cols[i]:
+        st.markdown(f"### {date.strftime('%a, %d.%m.')}")
+        st.markdown(f"{amp}")
+        st.markdown(f"Score: **{score}**")
+        with st.expander("Details"):
+            for line in details:
+                st.markdown("- " + line)
+
+
+
+with st.expander("ℹ️ Wie wird die Vorhersage berechnet?"):
+    st.markdown("""
+    Die Ampelbewertung basiert auf mehreren Wetterfaktoren:
+
+    | Faktor                    | Wirkung auf Score              |
+    |---------------------------|--------------------------------|
+    | **Windrichtung**         | Nur Nord (330–30°) & Süd (140–220°) sind kitebar (+10) |
+    | **Windgeschwindigkeit**  | Optimal > 14 km/h (+10), schwach < 8 km/h (–15) |
+    | **Böenstärke**           | Starke Böen > 35 km/h (–5)     |
+    | **Regenwahrscheinlichkeit** | > 40 % (–10)                 |
+    | **UV-Index**             | Hoch > 6 (+5 für Thermik-Hinweis) |
+    | **Bewölkung**            | Gering < 30 % (+5)             |
+    | **Föhndiagramm (Druck Bozen – Innsbruck)** | > +4 hPa = Südföhn (+10) / < –4 hPa = Nordföhn (+5) |
+    | **Webcam-Helligkeit**    | Sehr dunkel = –15, sonnig = +10 |
+
+    ### Quellen:
+    - 🌤 [Open-Meteo.com](https://open-meteo.com) – Wetterdaten (Wind, Regen, UV)
+    - 📷 [Webcam Windy](https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg)
+    - 🧭 Simulierte Druckdaten: Wetterring (Bozen/Innsbruck)
+    """)
