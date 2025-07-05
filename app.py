@@ -1,22 +1,26 @@
 import streamlit as st
 import requests
-from datetime import datetime, timedelta
+import pandas as pd
+from datetime import datetime
 
 st.set_page_config(page_title="Kite Forecast Reschensee", layout="wide")
-st.title("🏄‍♂️ Kite Forecast Reschensee (mit erweiterten Wetterdaten)")
 
-# Open-Meteo Forecast holen
-def get_forecast():
+# Parameter
+LAT, LON = 46.836, 10.508
+TIMEZONE = "Europe/Berlin"
+
+# Open-Meteo API Call
+def fetch_weather_data():
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": LAT,
+        "longitude": LON,
+        "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,precipitation_probability",
+        "daily": "uv_index_max,sunshine_duration",
+        "forecast_days": 4,
+        "timezone": TIMEZONE
+    }
     try:
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": 46.836,
-            "longitude": 10.508,
-            "hourly": "windspeed_10m,winddirection_10m,cloudcover,temperature_2m,gusts_10m,precipitation_probability",
-            "daily": "uv_index_max,sunshine_duration",
-            "forecast_days": 4,
-            "timezone": "Europe/Berlin"
-        }
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         return response.json()
@@ -24,117 +28,86 @@ def get_forecast():
         st.error(f"❌ Wetterdaten konnten nicht geladen werden: {e}")
         return None
 
-forecast_data = get_forecast()
+# Bewertung pro Tag
+def evaluate_day(wind_avg, wind_dir, clouds, rain, uv):
+    score = 0
+    if 10 <= wind_avg <= 25:
+        score += 2
+    elif 7 <= wind_avg < 10 or 25 < wind_avg <= 30:
+        score += 1
 
-# Druckdaten simulieren (ersetzbar durch echte Quellen)
-bozen_pressure = 1012.3
-innsbruck_pressure = 1007.9
-pressure_diff = bozen_pressure - innsbruck_pressure
+    if wind_dir in range(340, 361) or wind_dir in range(0, 30) or 150 <= wind_dir <= 210:
+        score += 2  # Nord oder Südwind
+    elif 30 < wind_dir < 150 or 210 < wind_dir < 330:
+        score -= 1  # Ost/West ungeeignet
 
-# Tagesbewertung
-def evaluate_day(day_index):
-    score = 50
-    info = []
+    if rain < 30:
+        score += 1
 
-    try:
-        h_index = day_index * 24 + 14  # 14 Uhr
-        wind = forecast_data["hourly"]["windspeed_10m"][h_index]
-        direction_deg = forecast_data["hourly"]["winddirection_10m"][h_index]
-        gusts = forecast_data["hourly"]["gusts_10m"][h_index]
-        cloud = forecast_data["hourly"]["cloudcover"][h_index]
-        precip = forecast_data["hourly"]["precipitation_probability"][h_index]
-        temp = forecast_data["hourly"]["temperature_2m"][h_index]
-        uv = forecast_data["daily"]["uv_index_max"][day_index]
+    if uv > 5:
+        score += 1
 
-        # Windrichtung
-        if 140 <= direction_deg <= 220:
-            direction = "Süd"
-            score += 10
-        elif direction_deg >= 330 or direction_deg <= 30:
-            direction = "Nord"
-            score += 10
-        else:
-            direction = "unkitebar"
-            score -= 30
-        info.append(f"💨 Windrichtung: {direction} ({direction_deg}°)")
+    if clouds < 60:
+        score += 1
 
-        # Windgeschwindigkeit
-        info.append(f"🌬 Wind: {wind} km/h")
-        if wind >= 14: score += 10
-        elif wind < 8: score -= 15
-
-        # Böen
-        info.append(f"💥 Böen: {gusts} km/h")
-        if gusts > 35: score -= 5
-
-        # Regen
-        info.append(f"🌧 Regenwahrscheinlichkeit: {precip}%")
-        if precip > 40: score -= 10
-
-        # UV
-        info.append(f"🔆 UV-Index: {uv}")
-        if uv > 6: score += 5
-
-        # Wolken
-        info.append(f"☁️ Bewölkung: {cloud}%")
-        if cloud < 30: score += 5
-
-        # Föhnlage
-        if pressure_diff >= 4:
-            score += 10
-            info.append("🌀 Südföhn erkannt")
-        elif pressure_diff <= -4:
-            score += 5
-            info.append("🌬 Nordföhn erkannt")
-
-    except Exception as e:
-        info.append(f"⚠️ Daten unvollständig oder Fehler: {e}")
-
-    # Ampelbewertung
-    if score >= 75:
-        amp = "🟢 Kitebar"
-    elif score >= 50:
-        amp = "🟡 Möglich"
+    if score >= 6:
+        return "🟢 Perfekt"
+    elif score >= 3:
+        return "🟡 Mittel"
     else:
-        amp = "🔴 Nicht empfehlenswert"
+        return "🔴 Schlecht"
 
-    return score, amp, info
+# Darstellung
+def show_forecast(data):
+    df = pd.DataFrame(data["hourly"])
+    df["time"] = pd.to_datetime(df["time"])
+    df.set_index("time", inplace=True)
 
-# Heutiger Tag
-if forecast_data:
-    score_today, amp_today, _ = evaluate_day(0)
-    st.subheader(f"{amp_today} – Score: {score_today}/100")
-else:
-    st.stop()
+    st.subheader("📊 Kitevorschau für die nächsten Tage")
 
-# Tagesübersicht
-st.subheader("📅 3-Tage Kite-Vorhersage")
+    for i in range(4):
+        day = (datetime.now().date() + pd.Timedelta(days=i)).isoformat()
+        day_data = df[df.index.date == pd.to_datetime(day).date()]
 
-cols = st.columns(3)
-for i in range(3):
-    d = datetime.today() + timedelta(days=i)
-    score, amp, detail = evaluate_day(i)
-    with cols[i]:
-        st.markdown(f"### {d.strftime('%A, %d.%m.')}")
-        st.markdown(amp)
-        st.markdown(f"**Score:** {score}/100")
-        with st.expander("🔎 Details"):
-            for line in detail:
-                st.markdown("- " + line)
+        if day_data.empty:
+            continue
 
-# Erklärung
-with st.expander("ℹ️ Erklärung & Datenquellen"):
-    st.markdown("""
-    ### Bewertungskriterien:
-    - ✅ **Windrichtung**: nur **Nord** oder **Süd** ist kitebar
-    - 🌬 **Windstärke**: ideal >14 km/h
-    - 💥 **Böen**: >35 km/h = Abwertung
-    - 🌧 **Regenrisiko**: >40 % = Abwertung
-    - 🔆 **UV-Index** & ☁️ **Sicht**: fließen in Thermikbewertung ein
-    - 🌀 **Föhnlage**: berechnet aus Druck Bozen – Innsbruck
+        wind_avg = day_data["windspeed_10m"].mean()
+        wind_dir = day_data["winddirection_10m"].median()
+        clouds = day_data["cloudcover"].mean()
+        rain = day_data["precipitation_probability"].max()
+        temp = day_data["temperature_2m"].mean()
+        uv = data["daily"]["uv_index_max"][i]
 
-    ### Datenquellen:
-    - [Open-Meteo Wetterdaten](https://open-meteo.com)
-    - [Webcam Windy Reschensee](https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg)
-    - Druckwerte simuliert
+        score = evaluate_day(wind_avg, wind_dir, clouds, rain, uv)
+
+        with st.expander(f"📅 {day} — Bewertung: {score}"):
+            st.write(f"- Durchschnittliche Windgeschwindigkeit: **{wind_avg:.1f} km/h**")
+            st.write(f"- Vorherrschende Windrichtung: **{wind_dir:.0f}°**")
+            st.write(f"- Max. Niederschlagswahrscheinlichkeit: **{rain:.0f}%**")
+            st.write(f"- Ø Bewölkung: **{clouds:.0f}%**")
+            st.write(f"- Temperatur: **{temp:.1f}°C**")
+            st.write(f"- UV-Index: **{uv}**")
+
+# App Start
+st.title("🏄‍♂️ Kite Forecast Reschensee (mit erweiterten Wetterdaten)")
+
+data = fetch_weather_data()
+if data:
+    show_forecast(data)
+
+    st.markdown("---")
+    st.markdown("### ℹ️ Bewertungskriterien")
+    st.write("""
+    - **Windrichtung:** Nur Nord (0°) oder Süd (180°) sind kitebar.
+    - **Windstärke:** Optimal zwischen 10–25 km/h.
+    - **Regen:** Bei hoher Regenwahrscheinlichkeit ist Vorsicht geboten.
+    - **Bewölkung & UV:** Je sonniger, desto besser für Thermik.
+    """)
+
+    st.markdown("### 🔗 Datenquellen")
+    st.write("""
+    - [Open-Meteo.com](https://open-meteo.com)
+    - [Webcam Reschenpass](https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg)
+    - [Wetterring Föhndiagramm](https://wetterring.at/profiwetter/foehndiagramm-tirol)
     """)
