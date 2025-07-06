@@ -104,6 +104,39 @@ def show_ampel(score):
     else:
         st.error("🔴 Keine Kitesession zu erwarten")
 
+# Stündliche Bewertung 12–17 Uhr anzeigen
+df_window = df_day[(df_day["time"].dt.hour >= 12) & (df_day["time"].dt.hour <= 17)]
+hourly_scores = []
+
+for _, row in df_window.iterrows():
+    s = 0
+    # Südwind
+    if 135 <= row["winddirection_10m"] <= 225:
+        s += 1
+        if row["windspeed_10m"] > 15:
+            s += 1
+    elif (row["winddirection_10m"] >= 315 or row["winddirection_10m"] <= 45) and row["windspeed_10m"] > 10:
+        s -= 1
+    # Bewölkung
+    if row["cloudcover"] < 60:
+        s += 1
+    # Temperatur
+    if row["temperature_2m"] > 16:
+        s += 1
+    hourly_scores.append(s)
+
+# Diagramm anzeigen
+st.markdown("**📊 Bewertung je Stunde (12–17 Uhr)**")
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+ax.plot(range(12, 18), hourly_scores, marker="o")
+ax.set_xticks(range(12, 18))
+ax.set_xlabel("Uhrzeit")
+ax.set_ylabel("Score")
+ax.set_title("Stündlicher Bewertungsverlauf")
+st.pyplot(fig)
+
+
 # -------------------------------
 # UI
 # -------------------------------
