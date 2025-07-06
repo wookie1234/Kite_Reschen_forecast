@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from PIL import Image
 from io import BytesIO
 import matplotlib.pyplot as plt
+import cv2
+import numpy as np
 
 # -------------------------------
 # SETTINGS
@@ -19,9 +21,10 @@ FORECAST_URL = (
     "&forecast_days=4&timezone=Europe%2FBerlin"
 )
 WEBCAM_URL = "https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg"
+FOEHN_DIAGRAM_URL = "https://static-weather.services.siag.it/sys/pgradient_de.png"
 
 # -------------------------------
-# UTILS
+# FUNKTIONEN
 # -------------------------------
 
 def load_forecast():
@@ -48,6 +51,50 @@ def fetch_webcam_image():
     except:
         return None, "Fehler beim Laden des Webcam-Bildes"
 
+def fetch_and_analyze_foehn_diagram(url=FOEHN_DIAGRAM_URL):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        image = Image.open(BytesIO(response.content)).convert("RGB")
+        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+
+        lower_red1 = np.array([0, 100, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 100])
+        upper_red2 = np.array([179, 255, 255])
+        mask = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), cv2.inRange(hsv, lower_red2, upper_red2))
+        points = np.column_stack(np.where(mask > 0))
+        if len(points) == 0:
+            return 0, "Keine rote Linie erkannt"
+
+        x_coords, y_coords = points[:, 1], points[:, 0]
+        curve = {}
+        for x in range(min(x_coords), max(x_coords)):
+            y_vals = y_coords[x_coords == x]
+            if len(y_vals) > 0:
+                curve[x] = np.mean(y_vals)
+
+        sorted_curve = dict(sorted(curve.items()))
+        y_vals = list(sorted_curve.values())
+        mean_y = np.mean(y_vals[:100])  # Grob für den heutigen Verlauf
+
+        # Bewertung: je niedriger im Bild, desto starker Südföhn (oben = 0)
+        if mean_y < 180:
+            score = 2  # starker Südföhn
+        elif mean_y < 220:
+            score = 1
+        elif mean_y > 260:
+            score = -2  # starker Nordföhn
+        elif mean_y > 240:
+            score = -1
+        else:
+            score = 0
+
+        return score, "Föhnscore berechnet"
+    except Exception as e:
+        return 0, f"Föhndiagramm konnte nicht geladen werden: {e}"
+
 def hourly_evaluation(df_day):
     df_window = df_day[(df_day["time"].dt.hour >= 12) & (df_day["time"].dt.hour <= 17)]
     hourly_scores = []
@@ -66,11 +113,12 @@ def hourly_evaluation(df_day):
         hourly_scores.append(s)
     return hourly_scores
 
-def analyze_day(df_day):
+def analyze_day(df_day, foehn_score=0):
     hourly_scores = hourly_evaluation(df_day)
-    score = sum(hourly_scores)
+    score = sum(hourly_scores) + foehn_score
     details = {
-        "Summe der stündlichen Bewertungen (12–17 Uhr)": score
+        "Summe der stündlichen Bewertungen (12–17 Uhr)": sum(hourly_scores),
+        "Föhndiagramm Einfluss": f"{'✅' if foehn_score > 0 else '❌'} ({foehn_score:+})"
     }
     return score, details, hourly_scores
 
@@ -83,63 +131,6 @@ def show_ampel(score):
         st.info("🟠 Schwacher Kitetag")
     else:
         st.error("🔴 Keine Kitesession zu erwarten")
-import cv2
-import numpy as np
-from PIL import Image
-from io import BytesIO
-
-def fetch_and_analyze_foehn_diagram(url="https://static-weather.services.siag.it/sys/pgradient_de.png"):
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGB")
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
-        hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
-
-        # Rotfilter (zwei Bereiche in HSV)
-        lower_red1 = np.array([0, 100, 100])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([160, 100, 100])
-        upper_red2 = np.array([179, 255, 255])
-
-        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-        mask = cv2.bitwise_or(mask1, mask2)
-
-        points = np.column_stack(np.where(mask > 0))
-        if len(points) == 0:
-            return None, "Keine rote Linie erkannt"
-
-        # Extrahiere mittlere y-Position pro x (um glatte Linie zu erzeugen)
-        x_coords = points[:, 1]
-        y_coords = points[:, 0]
-        curve = {}
-        for x in range(min(x_coords), max(x_coords)):
-            y_vals = y_coords[x_coords == x]
-            if len(y_vals) > 0:
-                curve[x] = np.mean(y_vals)
-
-        # Werte interpolieren (auf ~12–17 Uhr Zeitfenster normieren)
-        sorted_curve = dict(sorted(curve.items()))
-        y_vals = list(sorted_curve.values())
-        mean_pressure_line = np.mean(y_vals[:100])  # grobe Annahme: links = heute
-
-        # Bewertung:
-        if mean_pressure_line < 180:  # je tiefer im Bild, desto stärker der Südföhn (Pixel: oben = 0)
-            score = 2  # starker Südföhn
-        elif mean_pressure_line < 220:
-            score = 1  # moderater Südföhn
-        elif mean_pressure_line > 260:
-            score = -2  # starker Nordföhn
-        elif mean_pressure_line > 240:
-            score = -1  # leichter Nordföhn
-        else:
-            score = 0
-
-        return score, "Föhnscore berechnet"
-    except Exception as e:
-        return None, f"Föhndiagramm konnte nicht geladen werden: {e}"
 
 # -------------------------------
 # UI
@@ -147,23 +138,31 @@ def fetch_and_analyze_foehn_diagram(url="https://static-weather.services.siag.it
 st.set_page_config(layout="centered")
 st.title("Kite Forecast Reschensee - mit Webcam")
 
+st.markdown("""
+**🔎 Bewertungslogik (12–17 Uhr):**
+- **Südwind + Windstärke**: +1 bis +2
+- **Nordwind bei >10 km/h**: −1
+- **Wenig Bewölkung (<60%)**: +1
+- **Temperatur >16°C**: +1
+- **Föhndiagramm (automatisch analysiert)**: −2 bis +2
+""")
+
 foehn_score, foehn_message = fetch_and_analyze_foehn_diagram()
 st.markdown(f"### 🧭 Föhndiagramm-Analyse: {foehn_message}")
 if foehn_score is not None:
-    st.markdown(f"**Föhn-Score für heute:** {foehn_score}")
-
+    st.markdown(f"**Föhn-Score für heute:** {foehn_score:+}")
 
 data = load_forecast()
 if data:
     df = get_hourly_dataframe(data)
     today = datetime.now().date()
 
-    for offset in range(3):
+    for offset in range(3):  # Heute + 2 Tage
         current_day = today + timedelta(days=offset)
         st.markdown(f"## 📅 {current_day.strftime('%A, %d.%m.%Y')}")
         df_day = df[df["time"].dt.date == current_day]
 
-        score, details, hourly_scores = analyze_day(df_day)
+        score, details, hourly_scores = analyze_day(df_day, foehn_score if offset == 0 else 0)
         show_ampel(score)
 
         # Chart anzeigen
@@ -190,14 +189,9 @@ if data:
 else:
     st.stop()
 
-def analyze_day(df_day, foehn_score=0):
-    ...
-    score += foehn_score
-    details["Föhndiagramm Einfluss"] = f"{'✅' if foehn_score > 0 else '❌'} ({foehn_score:+})"
-    ...
-
-
-# --- Feedback-Bereich ---
+# -------------------------------
+# FEEDBACK
+# -------------------------------
 st.markdown("---")
 st.header("Feedback einreichen")
 
@@ -236,7 +230,6 @@ with st.form("feedback_form"):
         else:
             df_all = df_new
         df_all.to_csv(feedback_file, index=False)
-
         st.success("Feedback wurde gespeichert.")
 
 # Anzeige der bisherigen Feedbacks
