@@ -6,6 +6,7 @@ from PIL import Image
 from io import BytesIO
 import numpy as np
 import os
+import time
 
 # Konfiguration
 LAT, LON = 46.836, 10.508
@@ -34,20 +35,36 @@ def fetch_weather_data():
         st.error(f"Wetterdaten konnten nicht geladen werden: {e}")
         return None
 
-# Webcam analysieren
+# Webcam analysieren + Anzeige
 def analyze_webcam_image():
     try:
-        res = requests.get(WEBCAM_URL, timeout=10)
+        ts = int(time.time())
+        url = f"{WEBCAM_URL}?nocache={ts}"
+        res = requests.get(url, timeout=10)
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M Uhr")
+
         img = Image.open(BytesIO(res.content)).convert("L")
         np_img = np.array(img)
         brightness = np.mean(np_img)
-        st.image(img, caption="Aktuelles Webcam-Bild Reschensee", use_column_width=True)
+
+        st.image(img, caption=f"Aktuelles Webcam-Bild (Stand: {timestamp})", use_container_width=True)
+
+        st.markdown("**Bildhelligkeit (Webcam-Analyse):**")
+        st.progress(min(int(brightness), 255) / 255)
+
+        if brightness > 130:
+            st.info("Helligkeit: **klarer Himmel / gute Sicht**")
+        elif brightness > 90:
+            st.warning("Helligkeit: **wolkig oder diesig**")
+        else:
+            st.error("Helligkeit: **sehr dunkel oder schlechte Sicht**")
+
         return brightness
     except Exception as e:
         st.warning(f"Webcam konnte nicht analysiert werden: {e}")
         return None
 
-# Bewertung mit erweitertem Score
+# Bewertung Tagesbedingungen
 def evaluate_day(wind_avg, wind_dir, clouds, rain, uv, brightness):
     score = 0
     notes = {}
@@ -103,7 +120,7 @@ def evaluate_day(wind_avg, wind_dir, clouds, rain, uv, brightness):
 
     return score, status, notes
 
-# Darstellung Forecast + Ampelgrid
+# Tagesvorschau anzeigen
 def show_forecast(data, webcam_brightness):
     df = pd.DataFrame(data["hourly"])
     df["time"] = pd.to_datetime(df["time"])
