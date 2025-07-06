@@ -1,9 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
+import os
 from datetime import datetime, timedelta
 from PIL import Image
 from io import BytesIO
+import matplotlib.pyplot as plt
 
 # -------------------------------
 # SETTINGS
@@ -46,96 +48,41 @@ def fetch_webcam_image():
     except:
         return None, "Fehler beim Laden des Webcam-Bildes"
 
-def analyze_day(df_day):
+def hourly_evaluation(df_day):
     df_window = df_day[(df_day["time"].dt.hour >= 12) & (df_day["time"].dt.hour <= 17)]
+    hourly_scores = []
+    for _, row in df_window.iterrows():
+        s = 0
+        if 135 <= row["winddirection_10m"] <= 225:
+            s += 1
+            if row["windspeed_10m"] > 15:
+                s += 1
+        elif (row["winddirection_10m"] >= 315 or row["winddirection_10m"] <= 45) and row["windspeed_10m"] > 10:
+            s -= 1
+        if row["cloudcover"] < 60:
+            s += 1
+        if row["temperature_2m"] > 16:
+            s += 1
+        hourly_scores.append(s)
+    return hourly_scores
 
-    wind_speeds = df_window["windspeed_10m"]
-    wind_dirs = df_window["winddirection_10m"]
-    clouds = df_window["cloudcover"]
-    temps = df_window["temperature_2m"]
-
-    try:
-        temp_morning = df_day[df_day["time"].dt.hour == 8]["temperature_2m"].values[0]
-        temp_noon = df_day[df_day["time"].dt.hour == 14]["temperature_2m"].values[0]
-        gradient = temp_noon - temp_morning
-    except:
-        gradient = 0
-
-    score = 0
-    details = {}
-
-    # Südwind
-    if (wind_dirs >= 135).all() and (wind_dirs <= 225).all():
-        score += 1
-        details["Grundwindrichtung aus Süd"] = "✅"
-    else:
-        details["Grundwindrichtung aus Süd"] = "❌"
-
-    # Wolken
-    if (clouds < 60).mean() >= 0.5:
-        score += 2
-        details["Sonnige Thermikstunden (12–17 Uhr)"] = "✅"
-    else:
-        details["Sonnige Thermikstunden (12–17 Uhr)"] = "❌"
-
-    # Temperaturgradient
-    if gradient > 5:
-        score += 1
-        details["Temperaturgradient > 5 °C"] = "✅"
-    else:
-        details["Temperaturgradient > 5 °C"] = "❌"
-
-    # Windgeschwindigkeit
-    if wind_speeds.mean() > 15:
-        score += 2
-        details["Windgeschwindigkeit > 15 km/h"] = "✅"
-    else:
-        details["Windgeschwindigkeit > 15 km/h"] = "❌"
-
-    return score, details
+def analyze_day(df_day):
+    hourly_scores = hourly_evaluation(df_day)
+    score = sum(hourly_scores)
+    details = {
+        "Summe der stündlichen Bewertungen (12–17 Uhr)": score
+    }
+    return score, details, hourly_scores
 
 def show_ampel(score):
-    if score >= 6:
+    if score >= 12:
         st.success("🟢 Sehr guter Kitetag")
-    elif score >= 4:
+    elif score >= 8:
         st.warning("🟡 Solider Kitetag mit Unsicherheiten")
-    elif score >= 2:
+    elif score >= 4:
         st.info("🟠 Schwacher Kitetag")
     else:
         st.error("🔴 Keine Kitesession zu erwarten")
-
-# Stündliche Bewertung 12–17 Uhr anzeigen
-df_window = df_day[(df_day["time"].dt.hour >= 12) & (df_day["time"].dt.hour <= 17)]
-hourly_scores = []
-
-for _, row in df_window.iterrows():
-    s = 0
-    # Südwind
-    if 135 <= row["winddirection_10m"] <= 225:
-        s += 1
-        if row["windspeed_10m"] > 15:
-            s += 1
-    elif (row["winddirection_10m"] >= 315 or row["winddirection_10m"] <= 45) and row["windspeed_10m"] > 10:
-        s -= 1
-    # Bewölkung
-    if row["cloudcover"] < 60:
-        s += 1
-    # Temperatur
-    if row["temperature_2m"] > 16:
-        s += 1
-    hourly_scores.append(s)
-
-# Diagramm anzeigen
-st.markdown("**📊 Bewertung je Stunde (12–17 Uhr)**")
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots()
-ax.plot(range(12, 18), hourly_scores, marker="o")
-ax.set_xticks(range(12, 18))
-ax.set_xlabel("Uhrzeit")
-ax.set_ylabel("Score")
-ax.set_title("Stündlicher Bewertungsverlauf")
-st.pyplot(fig)
-
 
 # -------------------------------
 # UI
@@ -148,17 +95,27 @@ if data:
     df = get_hourly_dataframe(data)
     today = datetime.now().date()
 
-    for offset in range(3):  # Heute + 2 Tage
+    for offset in range(3):
         current_day = today + timedelta(days=offset)
         st.markdown(f"## 📅 {current_day.strftime('%A, %d.%m.%Y')}")
         df_day = df[df["time"].dt.date == current_day]
 
-        score, details = analyze_day(df_day)
+        score, details, hourly_scores = analyze_day(df_day)
         show_ampel(score)
+
+        # Chart anzeigen
+        st.markdown("**📊 Bewertung je Stunde (12–17 Uhr)**")
+        fig, ax = plt.subplots()
+        ax.plot(range(12, 18), hourly_scores, marker="o")
+        ax.set_xticks(range(12, 18))
+        ax.set_xlabel("Uhrzeit")
+        ax.set_ylabel("Score")
+        ax.set_title("Stündlicher Bewertungsverlauf")
+        st.pyplot(fig)
 
         with st.expander("Details zur Bewertung anzeigen"):
             for k, v in details.items():
-                st.write(f"{v} {k}")
+                st.write(f"{k}: {v}")
 
         if offset == 0:
             st.markdown("#### 📷 Webcam")
@@ -167,7 +124,6 @@ if data:
                 st.image(img, caption=f"Webcam-Bild (geladen: {ts})", use_container_width=True)
             else:
                 st.error("Webcam-Bild konnte nicht geladen werden.")
-
 else:
     st.stop()
 
