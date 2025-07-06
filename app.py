@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from PIL import Image
 from io import BytesIO
 import matplotlib.pyplot as plt
-import cv2
 import numpy as np
 
 # -------------------------------
@@ -21,12 +20,11 @@ FORECAST_URL = (
     "&forecast_days=4&timezone=Europe%2FBerlin"
 )
 WEBCAM_URL = "https://images-webcams.windy.com/48/1652791148/current/full/1652791148.jpg"
-FOEHN_DIAGRAM_URL = "https://static-weather.services.siag.it/sys/pgradient_de.png"
+FOEHN_URL = "https://static-weather.services.siag.it/sys/pgradient_de.png"
 
 # -------------------------------
-# FUNKTIONEN
+# UTILS
 # -------------------------------
-
 def load_forecast():
     try:
         response = requests.get(FORECAST_URL)
@@ -51,49 +49,34 @@ def fetch_webcam_image():
     except:
         return None, "Fehler beim Laden des Webcam-Bildes"
 
-def fetch_and_analyze_foehn_diagram(url=FOEHN_DIAGRAM_URL):
+def fetch_and_analyze_foehn_diagram():
     try:
-        response = requests.get(url)
+        response = requests.get(FOEHN_URL)
         response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGB")
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+        np_img = np.array(img)
 
-        lower_red1 = np.array([0, 100, 100])
-        upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([160, 100, 100])
-        upper_red2 = np.array([179, 255, 255])
-        mask = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), cv2.inRange(hsv, lower_red2, upper_red2))
-        points = np.column_stack(np.where(mask > 0))
-        if len(points) == 0:
+        # Rote Pixel erkennen (RGB-basiert)
+        red_pixels = (np_img[:, :, 0] > 150) & (np_img[:, :, 1] < 100) & (np_img[:, :, 2] < 100)
+        y_coords = np.where(red_pixels)[0]
+
+        if len(y_coords) == 0:
             return 0, "Keine rote Linie erkannt"
 
-        x_coords, y_coords = points[:, 1], points[:, 0]
-        curve = {}
-        for x in range(min(x_coords), max(x_coords)):
-            y_vals = y_coords[x_coords == x]
-            if len(y_vals) > 0:
-                curve[x] = np.mean(y_vals)
+        avg_y = np.mean(y_coords[:100])  # links = heute
 
-        sorted_curve = dict(sorted(curve.items()))
-        y_vals = list(sorted_curve.values())
-        mean_y = np.mean(y_vals[:100])  # Grob für den heutigen Verlauf
-
-        # Bewertung: je niedriger im Bild, desto starker Südföhn (oben = 0)
-        if mean_y < 180:
-            score = 2  # starker Südföhn
-        elif mean_y < 220:
-            score = 1
-        elif mean_y > 260:
-            score = -2  # starker Nordföhn
-        elif mean_y > 240:
-            score = -1
+        if avg_y < 180:
+            return 2, "Starker Südföhn erkannt"
+        elif avg_y < 220:
+            return 1, "Moderater Südföhn erkannt"
+        elif avg_y > 260:
+            return -2, "Starker Nordföhn erkannt"
+        elif avg_y > 240:
+            return -1, "Leichter Nordföhn erkannt"
         else:
-            score = 0
-
-        return score, "Föhnscore berechnet"
-    except Exception as e:
-        return 0, f"Föhndiagramm konnte nicht geladen werden: {e}"
+            return 0, "Neutraler Föhneinfluss"
+    except:
+        return 0, "Fehler beim Laden des Föhndiagramms"
 
 def hourly_evaluation(df_day):
     df_window = df_day[(df_day["time"].dt.hour >= 12) & (df_day["time"].dt.hour <= 17)]
@@ -113,12 +96,12 @@ def hourly_evaluation(df_day):
         hourly_scores.append(s)
     return hourly_scores
 
-def analyze_day(df_day, foehn_score=0):
+def analyze_day(df_day, foehn_score):
     hourly_scores = hourly_evaluation(df_day)
     score = sum(hourly_scores) + foehn_score
     details = {
-        "Summe der stündlichen Bewertungen (12–17 Uhr)": sum(hourly_scores),
-        "Föhndiagramm Einfluss": f"{'✅' if foehn_score > 0 else '❌'} ({foehn_score:+})"
+        "Stundenscore (12–17 Uhr)": sum(hourly_scores),
+        "Föhndiagramm": f"{foehn_score:+} Punkte"
     }
     return score, details, hourly_scores
 
@@ -136,28 +119,36 @@ def show_ampel(score):
 # UI
 # -------------------------------
 st.set_page_config(layout="centered")
-st.title("Kite Forecast Reschensee - mit Webcam")
+st.title("Kite Forecast Reschensee")
 
-st.markdown("""
-**🔎 Bewertungslogik (12–17 Uhr):**
-- **Südwind + Windstärke**: +1 bis +2
-- **Nordwind bei >10 km/h**: −1
-- **Wenig Bewölkung (<60%)**: +1
-- **Temperatur >16°C**: +1
-- **Föhndiagramm (automatisch analysiert)**: −2 bis +2
-""")
+# Erklärung der Logik
+with st.expander("ℹ️ Wie funktioniert die Vorhersage?"):
+    st.markdown("""
+    Die Kitetauglichkeit wird für jede Stunde zwischen 12 und 17 Uhr bewertet, da dies das Hauptzeitfenster für Thermik am Reschensee ist.
 
-foehn_score, foehn_message = fetch_and_analyze_foehn_diagram()
-st.markdown(f"### 🧭 Föhndiagramm-Analyse: {foehn_message}")
-if foehn_score is not None:
-    st.markdown(f"**Föhn-Score für heute:** {foehn_score:+}")
+    **Einfließende Faktoren:**
 
+    | Faktor                | Punkte (max) | Beschreibung |
+    |-----------------------|--------------|--------------|
+    | Windrichtung          | +1 / -1      | Südwind positiv, Nordwind negativ |
+    | Windgeschwindigkeit   | +1           | über 15 km/h |
+    | Bewölkung             | +1           | weniger als 60 % |
+    | Temperatur            | +1           | über 16 °C |
+    | Föhn-Diagramm         | -2 bis +2    | Druckdifferenz Innsbruck/Brenner |
+
+    Die Summe dieser Bewertungen ergibt den Tagesscore und eine visuelle Ampel.
+    """)
+
+foehn_score, foehn_info = fetch_and_analyze_foehn_diagram()
+st.markdown(f"**🧭 Föhndiagramm-Auswertung:** {foehn_info} ({foehn_score:+})")
+
+# Forecast laden
 data = load_forecast()
 if data:
     df = get_hourly_dataframe(data)
     today = datetime.now().date()
 
-    for offset in range(3):  # Heute + 2 Tage
+    for offset in range(3):
         current_day = today + timedelta(days=offset)
         st.markdown(f"## 📅 {current_day.strftime('%A, %d.%m.%Y')}")
         df_day = df[df["time"].dt.date == current_day]
@@ -165,7 +156,6 @@ if data:
         score, details, hourly_scores = analyze_day(df_day, foehn_score if offset == 0 else 0)
         show_ampel(score)
 
-        # Chart anzeigen
         st.markdown("**📊 Bewertung je Stunde (12–17 Uhr)**")
         fig, ax = plt.subplots()
         ax.plot(range(12, 18), hourly_scores, marker="o")
@@ -189,16 +179,11 @@ if data:
 else:
     st.stop()
 
-# -------------------------------
-# FEEDBACK
-# -------------------------------
+# Feedback-Formular
 st.markdown("---")
 st.header("Feedback einreichen")
-
 with st.form("feedback_form"):
-    st.subheader("Wie waren die Bedingungen für dich?")
     col1, col2 = st.columns(2)
-
     with col1:
         wind_rating = st.slider("Windbewertung (1 = kein Wind, 5 = zu stark)", 1, 5, 3)
         board_type = st.selectbox("Board-Typ", ["Twintip", "Foilboard", "Waveboard"])
@@ -207,7 +192,6 @@ with st.form("feedback_form"):
         kite_size = st.text_input("Kite-Größe (in m²)", "")
         weight = st.text_input("Körpergewicht (in kg)", "")
         feedback_date = st.date_input("Datum", value=datetime.today().date())
-
     comment = st.text_area("Kommentar (optional)")
     submitted = st.form_submit_button("Absenden")
 
@@ -221,7 +205,6 @@ with st.form("feedback_form"):
             "Gewicht": weight,
             "Kommentar": comment
         }
-
         feedback_file = "feedback.csv"
         df_new = pd.DataFrame([feedback_data])
         if os.path.exists(feedback_file):
@@ -232,8 +215,8 @@ with st.form("feedback_form"):
         df_all.to_csv(feedback_file, index=False)
         st.success("Feedback wurde gespeichert.")
 
-# Anzeige der bisherigen Feedbacks
-st.markdown("### Öffentliche Feedbacks")
+# Anzeige Feedbacks
+st.markdown("### 📄 Bisherige Feedbacks")
 if os.path.exists("feedback.csv"):
     df_fb = pd.read_csv("feedback.csv")
     st.dataframe(df_fb)
