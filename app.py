@@ -137,3 +137,53 @@ if data:
 
 else:
     st.stop()
+
+# --- Feedback-Bereich ---
+st.markdown("---")
+st.header("Feedback einreichen")
+
+with st.form("feedback_form"):
+    st.subheader("Wie waren die Bedingungen für dich?")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        wind_rating = st.slider("Windbewertung (1 = kein Wind, 5 = zu stark)", 1, 5, 3)
+        board_type = st.selectbox("Board-Typ", ["Twintip", "Foilboard", "Waveboard"])
+        kite_type = st.selectbox("Kite-Typ", ["Tubekite", "Foilkite"])
+    with col2:
+        kite_size = st.text_input("Kite-Größe (in m²)", "")
+        weight = st.text_input("Körpergewicht (in kg)", "")
+        feedback_date = st.date_input("Datum", value=datetime.today().date())
+
+    comment = st.text_area("Kommentar (optional)")
+    submitted = st.form_submit_button("Absenden")
+
+    if submitted:
+        feedback_data = {
+            "Datum": feedback_date,
+            "Windbewertung": wind_rating,
+            "Board": board_type,
+            "Kite-Typ": kite_type,
+            "Kite-Größe": kite_size,
+            "Gewicht": weight,
+            "Kommentar": comment
+        }
+
+        feedback_file = "feedback.csv"
+        df_new = pd.DataFrame([feedback_data])
+        if os.path.exists(feedback_file):
+            df_old = pd.read_csv(feedback_file)
+            df_all = pd.concat([df_old, df_new], ignore_index=True)
+        else:
+            df_all = df_new
+        df_all.to_csv(feedback_file, index=False)
+
+        st.success("Feedback wurde gespeichert.")
+
+# Anzeige der bisherigen Feedbacks
+st.markdown("### Öffentliche Feedbacks")
+if os.path.exists("feedback.csv"):
+    df_fb = pd.read_csv("feedback.csv")
+    st.dataframe(df_fb)
+else:
+    st.info("Noch kein Feedback vorhanden.")
