@@ -109,7 +109,7 @@ def show_ampel(score):
     if score >= 12:
         st.success("🟢 Sehr guter Kitetag")
     elif score >= 8:
-        st.warning("🟡 Solider Kitetag mit Unsicherheiten")
+        st.warning("🟡 Möglicher Kitetag mit Unsicherheiten")
     elif score >= 4:
         st.info("🟠 Schwacher Kitetag")
     else:
@@ -122,7 +122,7 @@ st.set_page_config(layout="centered")
 st.title("Kite Forecast Reschensee")
 
 # Erklärung der Logik
-with st.expander("ℹ️ Wie funktioniert die Vorhersage?"):
+with st.expander("Wie funktioniert die Vorhersage?"):
     st.markdown("""
     Die Kitetauglichkeit wird für jede Stunde zwischen 12 und 17 Uhr bewertet, da dies das Hauptzeitfenster für Thermik am Reschensee ist.
 
@@ -150,13 +150,13 @@ if data:
 
     for offset in range(3):
         current_day = today + timedelta(days=offset)
-        st.markdown(f"## 📅 {current_day.strftime('%A, %d.%m.%Y')}")
+        st.markdown(f"## {current_day.strftime('%A, %d.%m.%Y')}")
         df_day = df[df["time"].dt.date == current_day]
 
         score, details, hourly_scores = analyze_day(df_day, foehn_score if offset == 0 else 0)
         show_ampel(score)
 
-        st.markdown("**📊 Bewertung je Stunde (12–17 Uhr)**")
+        st.markdown("**Bewertung je Stunde (12–17 Uhr)**")
         fig, ax = plt.subplots()
         ax.plot(range(12, 18), hourly_scores, marker="o")
         ax.set_xticks(range(12, 18))
@@ -170,7 +170,7 @@ if data:
                 st.write(f"{k}: {v}")
 
         if offset == 0:
-            st.markdown("#### 📷 Webcam")
+            st.markdown("#### Webcam")
             img, ts = fetch_webcam_image()
             if img:
                 st.image(img, caption=f"Webcam-Bild (geladen: {ts})", use_container_width=True)
